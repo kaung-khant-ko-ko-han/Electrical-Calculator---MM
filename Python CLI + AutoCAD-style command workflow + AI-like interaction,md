@@ -1,0 +1,85 @@
+Act as a senior Python software engineer and CLI tool designer.
+
+Your task is to generate a production-quality Python command-line interface (CLI) application that mimics an intelligent, AutoCAD-like command line experience.
+
+## Core Requirements
+1. The CLI must:
+   - Accept user commands interactively (REPL-style loop).
+   - Support autocomplete suggestions for commands.
+   - Support command history recall using arrow keys.
+   - Provide dynamic prompts that guide the user step-by-step.
+   - Handle invalid commands gracefully.
+
+2. Use appropriate Python libraries:
+   - argparse (for structured commands)
+   - readline or prompt_toolkit (for autocomplete + history)
+   - tabulate (for table output)
+
+---
+
+## Features to Implement
+
+### 1. Command System
+- Implement commands such as:
+  - `add <a> <b>` → addition
+  - `sub <a> <b>` → subtraction
+  - `help` → show all commands
+  - `exit` → quit CLI
+
+### 2. Autocomplete
+- Suggest commands as the user types (like AutoCAD command line).
+
+### 3. Command Recall
+- Enable Up/Down arrow keys to cycle through previous commands.
+
+### 4. Dynamic Prompts
+- If user enters incomplete command:
+  Example:
+    > add
+    Prompt: "Enter first number:"
+    Prompt: "Enter second number:"
+
+---
+
+## AI-like Console Interaction
+
+- Simulate a conversation between two people (User and Assistant).
+- Display the conversation in a formatted table using `tabulate`.
+
+Example output:
+
++-----------+---------------------------+
+| Speaker   | Message                   |
++-----------+---------------------------+
+| User      | add 5 3                  |
+| Assistant | Result: 8                |
++-----------+---------------------------+
+
+---
+
+## Productivity Features
+- Implement command shortcuts (e.g., `a` for add).
+- Allow command suggestions when input is ambiguous.
+- Show helpful hints after each command.
+
+---
+
+## Code Requirements
+- Write clean, modular Python code.
+- Include comments explaining each section.
+- Use functions and classes where appropriate.
+- Include a `main()` entry point.
+- Ensure cross-platform compatibility.
+
+---
+
+## Bonus (Optional but Preferred)
+- Support config file (.conf or .yaml) for predefined settings.
+- Add colored terminal output (using colorama or rich).
+
+---
+
+## Output Format
+- Provide full working Python code.
+- Include instructions on how to install dependencies.
+- Include example usage commands.
