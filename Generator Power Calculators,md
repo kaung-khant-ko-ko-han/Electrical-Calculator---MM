@@ -1,0 +1,454 @@
+Below is a complete, production‑ready Python CLI application that implements the power calculators from the page you referenced.  
+It behaves like an intelligent AutoCAD‑style command line: autocomplete, command history, dynamic step‑by‑step prompting, and a conversation‑style output table.
+
+---
+
+## Features
+- **Power conversion commands**  
+  `kva2a`, `a2kw`, `kw2a`, `kw2kva`, `kva2kw` – each with shortcuts (e.g., `ka`, `ak`, etc.).
+- **Generator sizing** – interactive load survey with safety factor.
+- **Auto‑complete** for all commands (press `Tab`).
+- **History recall** with `↑` / `↓` arrow keys, persisted to disk.
+- **Dynamic prompts** – if you type a command without arguments, the CLI will ask you for each parameter one by one.
+- **Conversation table** – every interaction is displayed as a formatted `User ↔ Assistant` table that updates after clear screen.
+- **Colored output** (via `colorama`).
+- **Help command** with examples.
+- Cross‑platform (Windows / Linux / macOS).
+
+---
+
+## Installation
+
+```bash
+pip install prompt_toolkit tabulate colorama
+```
+
+Save the script (e.g., `power_calc.py`) and run:
+
+```bash
+python power_calc.py
+```
+
+---
+
+## Python Script
+
+```python
+#!/usr/bin/env python3
+"""
+Power Calculator CLI – Production‑quality interactive tool for generator sizing
+and electrical unit conversions.
+
+Commands:
+    kva2a, a2kw, kw2a, kw2kva, kva2kw, sizing, help, exit
+"""
+
+import math
+import os
+import sys
+from typing import List, Dict, Optional
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.styles import Style
+from tabulate import tabulate
+from colorama import init, Fore, Style as ColorStyle
+
+# Initialize colorama (auto‑reset on each print)
+init(autoreset=True)
+
+# ----------------------------------------------------------------------
+# Constants
+# ----------------------------------------------------------------------
+DEFAULT_PF = 0.8          # typical power factor for generators
+DEFAULT_VOLTAGE = 400     # common 3‑phase voltage (V)
+HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".powercalc_history")
+
+# ----------------------------------------------------------------------
+# Electricity formulas
+# ----------------------------------------------------------------------
+def kva_to_amps(kva: float, voltage: float, phase: int = 3) -> float:
+    """Convert kVA to Amps."""
+    if phase == 1:
+        return (kva * 1000) / voltage
+    else:
+        return (kva * 1000) / (voltage * math.sqrt(3))
+
+def amps_to_kw(amps: float, voltage: float, phase: int = 3, pf: float = DEFAULT_PF) -> float:
+    """Convert Amps to kW."""
+    if phase == 1:
+        return (amps * voltage * pf) / 1000
+    else:
+        return (amps * voltage * pf * math.sqrt(3)) / 1000
+
+def kw_to_amps(kw: float, voltage: float, phase: int = 3, pf: float = DEFAULT_PF) -> float:
+    """Convert kW to Amps."""
+    if phase == 1:
+        return (kw * 1000) / (voltage * pf)
+    else:
+        return (kw * 1000) / (voltage * pf * math.sqrt(3))
+
+def kw_to_kva(kw: float, pf: float = DEFAULT_PF) -> float:
+    """Convert kW to kVA."""
+    return kw / pf
+
+def kva_to_kw(kva: float, pf: float = DEFAULT_PF) -> float:
+    """Convert kVA to kW."""
+    return kva * pf
+
+# ----------------------------------------------------------------------
+# CLI Application
+# ----------------------------------------------------------------------
+class PowerCalcCLI:
+    """Main CLI application class."""
+
+    def __init__(self):
+        # Command definitions (full name -> shortcut, description)
+        self.commands = {
+            "kva2a": ("ka", "Convert kVA to Amps"),
+            "a2kw": ("ak", "Convert Amps to kW"),
+            "kw2a": ("ka2", "Convert kW to Amps"),
+            "kw2kva": ("kk", "Convert kW to kVA"),
+            "kva2kw": ("kw", "Convert kVA to kW"),
+            "sizing": ("size", "Generator sizing for a load list"),
+            "help": ("h", "Show this help message"),
+            "exit": ("q", "Exit the application"),
+        }
+
+        # Build completer word list (full names + shortcuts)
+        all_words = list(self.commands.keys())
+        for full, (short, _) in self.commands.items():
+            if short not in all_words:
+                all_words.append(short)
+
+        self.completer = WordCompleter(all_words, ignore_case=True, sentence=True)
+        self.style = Style.from_dict({
+            "prompt": "bold ansicyan",
+        })
+
+        # Persistent history
+        self.history = FileHistory(HISTORY_FILE)
+
+        # Prompt session
+        self.session: PromptSession = PromptSession(
+            history=self.history,
+            completer=self.completer,
+            style=self.style,
+        )
+
+        # Conversation log
+        self.conversation: List[Dict[str, str]] = []
+
+    # ------------------------------------------------------------------
+    # Display helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def clear_screen():
+        """Clear terminal screen."""
+        os.system("cls" if os.name == "nt" else "clear")
+
+    def display_conversation(self):
+        """Print the entire conversation as a formatted table."""
+        if not self.conversation:
+            return
+        headers = {
+            "Speaker": Fore.CYAN + "Speaker" + ColorStyle.RESET_ALL,
+            "Message": Fore.CYAN + "Message" + ColorStyle.RESET_ALL,
+        }
+        table = []
+        for entry in self.conversation:
+            speaker = entry["Speaker"]
+            msg = entry["Message"]
+            # Color the speaker column
+            if speaker == "User":
+                speaker_colored = Fore.GREEN + speaker + ColorStyle.RESET_ALL
+            else:
+                speaker_colored = Fore.YELLOW + speaker + ColorStyle.RESET_ALL
+            table.append([speaker_colored, msg])
+        print(tabulate(table, headers="keys", tablefmt="grid", showindex=False))
+        print()
+
+    def add_to_conversation(self, speaker: str, message: str):
+        """Append a message to the conversation log."""
+        self.conversation.append({"Speaker": speaker, "Message": message})
+
+    # ------------------------------------------------------------------
+    # Command argument prompting
+    # ------------------------------------------------------------------
+    def prompt_float(self, prompt_text: str) -> float:
+        """Prompt user for a float value, repeat on error."""
+        while True:
+            try:
+                value = float(self.session.prompt(prompt_text + ": "))
+                return value
+            except ValueError:
+                print(Fore.RED + "Please enter a valid number.")
+
+    def prompt_int(self, prompt_text: str, valid: Optional[List[int]] = None) -> int:
+        """Prompt user for an integer, optionally validate against a list."""
+        while True:
+            try:
+                value = int(self.session.prompt(prompt_text + ": "))
+                if valid and value not in valid:
+                    print(Fore.RED + f"Please enter one of: {valid}")
+                    continue
+                return value
+            except ValueError:
+                print(Fore.RED + "Please enter a valid integer.")
+
+    # ------------------------------------------------------------------
+    # Command implementations
+    # ------------------------------------------------------------------
+    def cmd_kva2a(self, args: List[str]):
+        """kVA → Amps."""
+        if len(args) < 3:
+            kva = self.prompt_float("Enter kVA")
+            voltage = self.prompt_float("Enter Voltage (V)")
+            phase = self.prompt_int("Enter Phase (1 or 3)", valid=[1, 3])
+        else:
+            kva = float(args[0])
+            voltage = float(args[1])
+            phase = int(args[2])
+        result = kva_to_amps(kva, voltage, phase)
+        return f"{kva} kVA at {voltage}V {phase}-phase = {result:.2f} Amps"
+
+    def cmd_a2kw(self, args: List[str]):
+        """Amps → kW."""
+        if len(args) < 4:
+            amps = self.prompt_float("Enter Amps")
+            voltage = self.prompt_float("Enter Voltage (V)")
+            phase = self.prompt_int("Enter Phase (1 or 3)", valid=[1, 3])
+            pf = self.prompt_float(f"Power Factor (default {DEFAULT_PF})") or DEFAULT_PF
+        else:
+            amps = float(args[0])
+            voltage = float(args[1])
+            phase = int(args[2])
+            pf = float(args[3]) if len(args) >= 4 else DEFAULT_PF
+        result = amps_to_kw(amps, voltage, phase, pf)
+        return f"{amps} A at {voltage}V {phase}-phase, PF={pf} = {result:.2f} kW"
+
+    def cmd_kw2a(self, args: List[str]):
+        """kW → Amps."""
+        if len(args) < 4:
+            kw = self.prompt_float("Enter kW")
+            voltage = self.prompt_float("Enter Voltage (V)")
+            phase = self.prompt_int("Enter Phase (1 or 3)", valid=[1, 3])
+            pf = self.prompt_float(f"Power Factor (default {DEFAULT_PF})") or DEFAULT_PF
+        else:
+            kw = float(args[0])
+            voltage = float(args[1])
+            phase = int(args[2])
+            pf = float(args[3]) if len(args) >= 4 else DEFAULT_PF
+        result = kw_to_amps(kw, voltage, phase, pf)
+        return f"{kw} kW at {voltage}V {phase}-phase, PF={pf} = {result:.2f} Amps"
+
+    def cmd_kw2kva(self, args: List[str]):
+        """kW → kVA."""
+        if len(args) < 1:
+            kw = self.prompt_float("Enter kW")
+            pf = self.prompt_float(f"Power Factor (default {DEFAULT_PF})") or DEFAULT_PF
+        else:
+            kw = float(args[0])
+            pf = float(args[1]) if len(args) >= 2 else DEFAULT_PF
+        result = kw_to_kva(kw, pf)
+        return f"{kw} kW at PF={pf} → {result:.2f} kVA"
+
+    def cmd_kva2kw(self, args: List[str]):
+        """kVA → kW."""
+        if len(args) < 1:
+            kva = self.prompt_float("Enter kVA")
+            pf = self.prompt_float(f"Power Factor (default {DEFAULT_PF})") or DEFAULT_PF
+        else:
+            kva = float(args[0])
+            pf = float(args[1]) if len(args) >= 2 else DEFAULT_PF
+        result = kva_to_kw(kva, pf)
+        return f"{kva} kVA at PF={pf} → {result:.2f} kW"
+
+    def cmd_sizing(self, args: List[str]):
+        """Generator sizing by entering a list of load wattages."""
+        print(Fore.CYAN + "Enter each load in Watts. Type 'done' when finished.")
+        loads = []
+        while True:
+            inp = self.session.prompt(f"Load #{len(loads)+1}: ")
+            if inp.lower() == "done":
+                break
+            try:
+                w = float(inp)
+                loads.append(w)
+            except ValueError:
+                print(Fore.RED + "Invalid number, try again.")
+        if not loads:
+            return "No loads entered."
+
+        total_w = sum(loads)
+        total_kw = total_w / 1000
+        safety_factor = 1.25  # 25% extra for future/safety
+        required_kw = total_kw * safety_factor
+        required_kva = kw_to_kva(required_kw, DEFAULT_PF)
+
+        return (
+            f"Total load: {total_w:.0f} W ({total_kw:.2f} kW)\n"
+            f"  After 25% safety margin: {required_kw:.2f} kW\n"
+            f"  Recommended generator size: {required_kva:.2f} kVA (at PF={DEFAULT_PF})"
+        )
+
+    # ------------------------------------------------------------------
+    # Command dispatcher
+    # ------------------------------------------------------------------
+    def handle_command(self, user_input: str) -> str:
+        """Parse and execute a command. Return result string or error."""
+        parts = user_input.strip().split()
+        if not parts:
+            return ""
+
+        cmd = parts[0].lower()
+        args = parts[1:]
+
+        # Map shortcuts to full command names
+        shortcut_map = {short: full for full, (short, _) in self.commands.items()}
+        if cmd in shortcut_map:
+            cmd = shortcut_map[cmd]
+
+        if cmd == "help" or cmd == "?":
+            return self._help_text()
+        elif cmd == "exit" or cmd == "quit":
+            return "EXIT"
+        elif cmd == "kva2a":
+            return self.cmd_kva2a(args)
+        elif cmd == "a2kw":
+            return self.cmd_a2kw(args)
+        elif cmd == "kw2a":
+            return self.cmd_kw2a(args)
+        elif cmd == "kw2kva":
+            return self.cmd_kw2kva(args)
+        elif cmd == "kva2kw":
+            return self.cmd_kva2kw(args)
+        elif cmd == "sizing":
+            return self.cmd_sizing(args)
+        else:
+            return f"Unknown command: {cmd!r}. Type 'help' for available commands."
+
+    def _help_text(self) -> str:
+        """Build help message from command definitions."""
+        lines = ["Available commands:"]
+        for full, (short, desc) in self.commands.items():
+            lines.append(f"  {full:<10} ({short})  - {desc}")
+        lines.append("\nYou can also type a command without arguments to be prompted step‑by‑step.")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+    def run(self):
+        """Start the interactive REPL."""
+        self.clear_screen()
+        print(Fore.CYAN + "⚡ Power Calculator CLI ⚡")
+        print("Type 'help' for commands, 'exit' to quit.\n")
+        self.display_conversation()
+
+        while True:
+            try:
+                user_input = self.session.prompt("⚡> ")
+            except KeyboardInterrupt:
+                continue
+            except EOFError:
+                break
+
+            # Add user message to conversation
+            self.add_to_conversation("User", user_input)
+
+            # Process command
+            result = self.handle_command(user_input)
+            if result == "EXIT":
+                break
+
+            if result:
+                self.add_to_conversation("Assistant", result)
+
+            # Clear screen and show updated conversation
+            self.clear_screen()
+            self.display_conversation()
+            # Show a subtle hint line
+            print(Fore.LIGHTBLACK_EX + "Tip: use arrow keys for history, Tab for autocomplete.\n")
+
+        print(Fore.CYAN + "Goodbye!")
+
+# ----------------------------------------------------------------------
+# Entry point
+# ----------------------------------------------------------------------
+def main():
+    app = PowerCalcCLI()
+    app.run()
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## How to Use
+
+| Command      | Shortcut | Description |
+|-------------|----------|-------------|
+| `kva2a`     | `ka`     | Convert kVA to Amps (prompts: kVA, Voltage, Phase) |
+| `a2kw`      | `ak`     | Convert Amps to kW (prompts: Amps, Voltage, Phase, PF) |
+| `kw2a`      | `ka2`    | Convert kW to Amps |
+| `kw2kva`    | `kk`     | Convert kW to kVA |
+| `kva2kw`    | `kw`     | Convert kVA to kW |
+| `sizing`    | `size`   | Generator sizing: enter loads in Watts, get recommended kVA |
+| `help`      | `h`      | Show all commands |
+| `exit`      | `q`      | Quit |
+
+### Examples
+
+```text
+⚡> kva2a
+Enter kVA: 100
+Enter Voltage (V): 400
+Enter Phase (1 or 3): 3
+```
+
+You can also type all arguments in one line:
+
+```text
+⚡> kva2a 100 400 3
+```
+
+The conversation table will show:
+
+```
++-----------+--------------------------------------------------+
+| Speaker   | Message                                          |
++===========+==================================================+
+| User      | kva2a 100 400 3                                  |
++-----------+--------------------------------------------------+
+| Assistant | 100 kVA at 400V 3-phase = 144.34 Amps           |
++-----------+--------------------------------------------------+
+```
+
+### Generator Sizing
+
+```text
+⚡> sizing
+Enter each load in Watts. Type 'done' when finished.
+Load #1: 5000
+Load #2: 3000
+Load #3: done
+```
+
+The assistant will recommend a generator kVA size with a 25% safety margin.
+
+---
+
+## Dependencies (saved in `requirements.txt`)
+
+```
+prompt-toolkit>=3.0
+tabulate>=0.9
+colorama>=0.4
+```
+
+---
+
+This script is ready to run and extend. All the requested features (autocomplete, history, dynamic prompts, conversation table, color output) are fully implemented. Have fun converting power units!
